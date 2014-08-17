@@ -6,10 +6,13 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
 (in-package :cl-user)
 (defpackage wordbank
   (:use :cl)
-  (:export ))
+  (:export :query-item-list
+           :query-meaning-list
+           :main))
 (in-package :wordbank)
 
 (defun script-p ()
+  "Return T if this code is executed in script mode."
   (member (pathname-name *load-truename*)
           sb-ext:*posix-argv*
           :test #'(lambda (x y) (search x y :test #'equalp))))
@@ -20,28 +23,21 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
     (ql:quickload "drakma")
     (ql:quickload "cl-ppcre")))
 
-(defparameter *debug-output* *standard-output*)
 (defparameter *debug-output* nil)
+(defparameter *prompt-message* "Input search word or :q to quit")
+(defparameter *prompt-string* "WORDBANK> ")
 
-(defparameter *prompt-message* "Input search word ro :q to quit")
+;; Entry point of this program
+(defun main (&optional args)
+  (declare (ignore args))
+  (format t "~a~%" *prompt-message*)
+  (break-loop (prompt-handler) #'(lambda (x) (eq x :q)) *prompt-string*))
 
-;; I/O utilities from On Lisp
-(defun prompt (&rest args)
-  (apply #'format *query-io* args)
-  (force-output *query-io*)
-  (read *query-io*))
-
-(defun break-loop (fn quit &rest args)
-  (loop
-     (let ((in (apply #'prompt args)))
-       (if (funcall quit in)
-           (return)
-           (format *query-io* "~a~%" (funcall fn in))))))
-
-;; State of this closure
-;; IDLE:   get a word and display the list of the IDs
-;; SELECT: get a id and display the meaning
 (defun prompt-handler ()
+  "State of this closure
+IDLE:   Send a query of a requested word and print the titles of the word.
+SELECT: Print the meaning of the requested word.
+"
   (let ((state 'idle)
         items)
     (labels ((rec (in)
@@ -60,8 +56,10 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
                     (progn (setf state 'idle)
                            (format nil "No entry is found"))))
           (select (setf state 'idle) 
-                  (let ((meanings (query-meaning-list (car (nth in items)))))
+                  (let* ((item (nth in items))
+                         (meanings (query-meaning-list (car item))))
                     (with-output-to-string (s)
+                      (format s "[~2d] ~a~%" in (cdr item))
                       (loop
                            for m in meanings
                            for i from 0
@@ -69,11 +67,18 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
                            finally (format s "~%~a" *prompt-message*))))))))
       #'rec)))
 
-;; Entry point
-(defun main (args)
-  (declare (ignore args))
-  (format t "~a~%" *prompt-message*)
-  (break-loop (prompt-handler) #'(lambda (x) (eq x :q)) "> "))
+;; I/O utilities from On Lisp
+(defun prompt (&rest args)
+  (apply #'format *query-io* args)
+  (force-output *query-io*)
+  (read *query-io*))
+
+(defun break-loop (fn quit &rest args)
+  (loop
+     (let ((in (apply #'prompt args)))
+       (if (funcall quit in)
+           (return)
+           (format *query-io* "~a~%" (funcall fn in))))))
 
 ;; Dejizo REST API
 ;; (1) Search IDs of the word
@@ -93,22 +98,23 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
   (meaning-list (query-item item)))
 
 (defun query-item (id)
-  (query (query-item-uri id)))
+  (http-query (http-query-item-uri id)))
 
 (defun query-word (word)
-  (query (query-word-uri word)))
+  (http-query (http-query-word-uri word)))
 
-(defun query-word-uri (word)
-  (query-uri *query-word-uri* word))
+(defun http-query-word-uri (word)
+  (http-query-uri *query-word-uri* word))
 
-(defun query-item-uri (id)
-  (query-uri *query-item-uri* id))
+(defun http-query-item-uri (id)
+  (http-query-uri *query-item-uri* id))
 
-(defun query-uri (uri val)
+(defun http-query-uri (uri val)
   (with-output-to-string (stream)
     (format stream uri val)))
 
-(defun query (uri)
+(defun http-query (uri)
+  "Send HTTP request to URI with Dejizo REST API and return the HTML body."
   (format *debug-output* "URI: ~a~%" uri)
   (multiple-value-bind (body) (drakma:http-request uri)
     body))
@@ -118,9 +124,11 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
 (defparameter *regex-meaning* "<div>([^<]+)</div>")
 
 (defun item-list (html)
+  "Parse HTML and return a list of dotted pairs which contain ItemIDs in car and Title in cdr."
   (mapcar #'cons (item-id html) (item-title html)))
 
 (defun meaning-list (html)
+  "Parse HTML and return a list of meanings."
   (parse-item *regex-meaning* html))
 
 (defun item-id (html)
