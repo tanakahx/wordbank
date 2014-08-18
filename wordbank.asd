@@ -11,7 +11,7 @@
   :version "0.1"
   :author ""
   :license ""
-  :depends-on (:drakma)
+  :depends-on (:drakma :cl-ppcre :cl-fad)
   :components ((:module "src"
                 :components
                 ((:file "wordbank"))))

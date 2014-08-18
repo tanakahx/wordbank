@@ -47,17 +47,22 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
   (let* ((*standard-output* (make-broadcast-stream))
          (*error-output* *standard-output*))
     (ql:quickload "drakma")
-    (ql:quickload "cl-ppcre")))
+    (ql:quickload "cl-ppcre")
+    (ql:quickload "cl-fad")))
 
 (defparameter *debug-output* nil)
 (defparameter *prompt-message* "Input search word or :q to quit")
 (defparameter *prompt-string* "WORDBANK> ")
 
+;; Data base
+(defparameter *db* (make-hash-table :test #'equal))
+(defparameter *db-file* #P"~/.wordbank.db")
+
 ;; Entry point of this program
 (defun main (&optional args)
   (declare (ignore args))
   (format t "~a~%" *prompt-message*)
-  (break-loop (prompt-handler) #'(lambda (x) (eq x :q)) *prompt-string*))
+  (break-loop (prompt-handler) #'prompt-read-line #'(lambda (x) (string= x ":q")) *prompt-string*))
 
 (defun prompt-handler ()
   "State of this closure
@@ -68,11 +73,22 @@ SELECT: Print the meaning of the requested word.
         items)
     (labels ((rec (in)
         (case state
-          (idle (setf state 'select) 
+          (idle
+           (when (string= in "") (return-from rec ""))
+           (cond ((string= in ":s")
+                  (save-db)
+                  (return-from rec (format nil "Save DB in ~a." *db-file*))))
+           (setf state 'select)
+                ;; When strict search mode, if the word is found in DB then pick it up from DB.
+                (unless (wildcard-p in)
+                  (let ((meaning (search-meaning-list in)))
+                    (when meaning
+                      (setf items (list (cons nil in))) ; a car part is dummy
+                      (return-from rec (rec "0")))))
                 (setf items (query-item-list (search-word in)))
                 (if items
-                    (if (string= (symbol-name in) (string-upcase (cdr (first items))))
-                        (rec 0)
+                    (if (string= in (cdr (first items)))
+                        (return-from rec (rec "0"))
                         (with-output-to-string (s)
                           (loop
                              for item in items
@@ -82,10 +98,14 @@ SELECT: Print the meaning of the requested word.
                     (progn (setf state 'idle)
                            (format nil "No entry is found"))))
           (select (setf state 'idle) 
-                  (let* ((item (nth in items))
-                         (meanings (query-meaning-list (car item))))
+                  (let* ((item (nth (parse-integer in) items))
+                         (meanings (search-meaning-list (cdr item))))
+                    (unless meanings
+                      (format *debug-output* "New DB entry: \"~a\"~%" (cdr item))
+                      (setf meanings (query-meaning-list (car item)))
+                      (add-word-meaning (cdr item) meanings))
                     (with-output-to-string (s)
-                      (format s "[~2d] ~a~%" in (cdr item))
+                      (format s "[~a] ~a~%" in (cdr item))
                       (loop
                            for m in meanings
                            for i from 0
@@ -93,22 +113,48 @@ SELECT: Print the meaning of the requested word.
                            finally (format s "~%~a" *prompt-message*))))))))
       #'rec)))
 
+(defun wildcard-p (in)
+  (cl-ppcre:scan "\\*" in))
+
 (defun search-word (in)
   "If '*' is specified in IN, split IN with '*' and return the first element as a search word."
-  (car (cl-ppcre:split "\\*" (symbol-name in))))
+  (car (cl-ppcre:split "\\*" in)))
 
 ;; I/O utilities from On Lisp
-(defun prompt (&rest args)
+(defun prompt-read-line (&rest args)
   (apply #'format *query-io* args)
   (force-output *query-io*)
-  (read *query-io*))
+  (read-line *query-io*))
 
-(defun break-loop (fn quit &rest args)
+(defun break-loop (fn prompt quit &rest args)
+  (when (cl-fad:file-exists-p *db-file*)
+    (load-db))
   (loop
-     (let ((in (apply #'prompt args)))
+     (let ((in (apply prompt args)))
        (if (funcall quit in)
            (return)
            (format *query-io* "~a~%" (funcall fn in))))))
+
+;; DB manipulation functions
+(defun search-meaning-list (word)
+  (multiple-value-bind (value present-p) (gethash word *db*)
+    (when present-p value)))
+
+(defun add-word-meaning (word meaning)
+  (setf (gethash word *db*) meaning))
+
+(defun clear-db ()
+  (setf *db* (make-hash-table :test #'equal)))
+
+(defun save-db ()
+  (with-open-file (out *db-file* :direction :output :if-exists :supersede)
+    (maphash #'(lambda (k v) (format out "~s~%" (list k v))) *db*)))
+
+(defun load-db ()
+  (clear-db)
+  (with-open-file (in *db-file*)
+    (loop for line = (read in nil)
+       while line do (add-word-meaning (car line) (cadr line)))))
 
 ;; Dejizo REST API
 ;; (1) Search IDs of the word
