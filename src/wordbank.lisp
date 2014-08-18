@@ -69,7 +69,7 @@ SELECT: Print the meaning of the requested word.
     (labels ((rec (in)
         (case state
           (idle (setf state 'select) 
-                (setf items (query-item-list in))
+                (setf items (query-item-list (search-word in)))
                 (if items
                     (if (string= (symbol-name in) (string-upcase (cdr (first items))))
                         (rec 0)
@@ -93,6 +93,10 @@ SELECT: Print the meaning of the requested word.
                            finally (format s "~%~a" *prompt-message*))))))))
       #'rec)))
 
+(defun search-word (in)
+  "If '*' is specified in IN, split IN with '*' and return the first element as a search word."
+  (car (cl-ppcre:split "\\*" (symbol-name in))))
+
 ;; I/O utilities from On Lisp
 (defun prompt (&rest args)
   (apply #'format *query-io* args)
@@ -112,8 +116,9 @@ SELECT: Print the meaning of the requested word.
 ;; (2) Get the meaning of the ID
 ;; http://public.dejizo.jp/NetDicV09.asmx/GetDicItemLite?Dic=EJdict&Item=ID&Loc=&Prof=XHTML
 
+(defparameter *query-page-size* 20)
 (defparameter *query-word-uri* 
-  "http://public.dejizo.jp/NetDicV09.asmx/SearchDicItemLite?Dic=EJdict&Word=~a&Scope=HEADWORD&Match=STARTWITH&Merge=AND&Prof=XHTML&PageSize=20&PageIndex=0")
+  "http://public.dejizo.jp/NetDicV09.asmx/SearchDicItemLite?Dic=EJdict&Word=~a&Scope=HEADWORD&Match=STARTWITH&Merge=AND&Prof=XHTML&PageSize=~a&PageIndex=0")
 (defparameter *query-item-uri*
   "http://public.dejizo.jp/NetDicV09.asmx/GetDicItemLite?Dic=EJdict&Item=~a&Loc=&Prof=XHTML")
 
@@ -130,14 +135,14 @@ SELECT: Print the meaning of the requested word.
   (http-query (http-query-word-uri word)))
 
 (defun http-query-word-uri (word)
-  (http-query-uri *query-word-uri* word))
+  (http-query-uri *query-word-uri* word *query-page-size*))
 
 (defun http-query-item-uri (id)
   (http-query-uri *query-item-uri* id))
 
-(defun http-query-uri (uri val)
+(defun http-query-uri (uri &rest val)
   (with-output-to-string (stream)
-    (format stream uri val)))
+    (apply #'format (nconc (list stream uri) val))))
 
 (defun http-query (uri)
   "Send HTTP request to URI with Dejizo REST API and return the HTML body."
