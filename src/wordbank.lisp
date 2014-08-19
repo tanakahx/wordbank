@@ -72,32 +72,33 @@ SELECT: Print the meaning of the requested word.
   (let ((state 'idle)
         items)
     (labels ((rec (in)
-        (case state
-          (idle
-           (when (string= in "") (return-from rec ""))
-           (cond ((string= in ":s")
-                  (save-db)
-                  (return-from rec (format nil "Save DB in ~a." *db-file*))))
-           (setf state 'select)
-                ;; When strict search mode, if the word is found in DB then pick it up from DB.
-                (unless (wildcard-p in)
-                  (let ((meaning (search-meaning-list in)))
-                    (when meaning
-                      (setf items (list (cons nil in))) ; a car part is dummy
-                      (return-from rec (rec "0")))))
-                (setf items (query-item-list (search-word in)))
-                (if items
-                    (if (string= in (cdr (first items)))
-                        (return-from rec (rec "0"))
-                        (with-output-to-string (s)
-                          (loop
-                             for item in items
-                             for i from 0
-                             do (format s "[~2d] ~a~%" i (cdr item))
-                             finally (format s "~%Select a number listed above (upto ~d)" i))))
-                    (progn (setf state 'idle)
-                           (format nil "No entry is found"))))
-          (select (setf state 'idle) 
+               (case state
+                 (idle
+                  (when (string= in "") (return-from rec ""))
+                  (cond ((string= in ":w")
+                         (save-db)
+                         (return-from rec (format nil "Save DB in ~a." *db-file*))))
+                  (setf state 'select)
+                  ;; When strict search mode, if the word is found in DB then pick it up from DB.
+                  (unless (wildcard-p in)
+                    (let ((meaning (search-meaning-list in)))
+                      (when meaning
+                        (setf items (list (cons nil in))) ; a car part is dummy
+                        (return-from rec (rec "0")))))
+                  (setf items (query-item-list (search-word in)))
+                  (if items
+                      (if (or (= (length items) 1) (string= in (cdr (first items))))
+                          (return-from rec (rec "0"))
+                          (with-output-to-string (s)
+                            (loop
+                               for item in items
+                               for i from 0
+                               do (format s "[~2d] ~a~%" i (cdr item))
+                               finally (format s "~%Select a number listed above (upto ~d)" i))))
+                      (progn (setf state 'idle)
+                             (format nil "No entry is found"))))
+                 (select
+                  (setf state 'idle)
                   (let* ((item (nth (parse-integer in) items))
                          (meanings (search-meaning-list (cdr item))))
                     (unless meanings
@@ -107,10 +108,10 @@ SELECT: Print the meaning of the requested word.
                     (with-output-to-string (s)
                       (format s "[~a] ~a~%" in (cdr item))
                       (loop
-                           for m in meanings
-                           for i from 0
-                           do (format s "~a~%" m)
-                           finally (format s "~%~a" *prompt-message*))))))))
+                         for m in meanings
+                         for i from 0
+                         do (format s "~a~%" m)
+                         finally (format s "~%~a" *prompt-message*))))))))
       #'rec)))
 
 (defun wildcard-p (in)
