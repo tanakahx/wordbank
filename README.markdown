@@ -18,6 +18,12 @@ After the following installation has been done, instead of executing this progra
 $ ./src/wordbank.lisp
 ```
 
+### Commands
+
+* `:q` Quit from the program
+* `:w` Update a local DB
+* `:t` Show a list of the most frequently searched words
+
 ## Installation
 
 ### SBCL
