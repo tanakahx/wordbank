@@ -34,6 +34,7 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
   (:use :cl)
   (:export :query-item-list
            :query-meaning-list
+           :new-db
            :main))
 (in-package :wordbank)
 
@@ -53,6 +54,7 @@ exec sbcl --core $SBCL_CORE --script $0 $0 "$@"
 (defparameter *debug-output* nil)
 (defparameter *prompt-message* "Input search word or :q to quit")
 (defparameter *prompt-string* "WORDBANK> ")
+(defparameter *top-n* 10)
 
 ;; Data base
 (defparameter *db* (make-hash-table :test #'equal))
@@ -74,15 +76,23 @@ SELECT: Print the meaning of the requested word.
     (labels ((rec (in)
                (case state
                  (idle
-                  (when (string= in "") (return-from rec ""))
                   (cond ((string= in ":w")
                          (save-db)
-                         (return-from rec (format nil "Save DB in ~a." *db-file*))))
+                         (return-from rec (format nil "Save DB in ~a." *db-file*)))
+                        ((string= in ":t")
+                         (return-from rec
+                           (with-output-to-string (s)
+                             (loop for x in (nthmost *top-n* *db*)
+                                do (destructuring-bind (word (meaning . count)) x
+                                     (format s (make-string 80 :initial-element #\-))
+                                     (format s "~%(~a) ~a~%~a~%" count word meaning))))))
+                        ((string= in "") (return-from rec "")))
                   (setf state 'select)
                   ;; When strict search mode, if the word is found in DB then pick it up from DB.
                   (unless (wildcard-p in)
                     (let ((meaning (search-meaning-list in)))
                       (when meaning
+                        (update-meaning-count meaning)
                         (setf items (list (cons nil in))) ; a car part is dummy
                         (return-from rec (rec "0")))))
                   (setf items (query-item-list (search-word in)))
@@ -107,11 +117,8 @@ SELECT: Print the meaning of the requested word.
                       (add-word-meaning (cdr item) meanings))
                     (with-output-to-string (s)
                       (format s "[~a] ~a~%" in (cdr item))
-                      (loop
-                         for m in meanings
-                         for i from 0
-                         do (format s "~a~%" m)
-                         finally (format s "~%~a" *prompt-message*))))))))
+                      (format s "~a~%" (car meanings))
+                      (format s "~%~a" *prompt-message*)))))))
       #'rec)))
 
 (defun wildcard-p (in)
@@ -141,11 +148,18 @@ SELECT: Print the meaning of the requested word.
   (multiple-value-bind (value present-p) (gethash word *db*)
     (when present-p value)))
 
+(defun update-meaning-count (meaning)
+  (incf (cdr meaning)))
+
 (defun add-word-meaning (word meaning)
   (setf (gethash word *db*) meaning))
 
 (defun clear-db ()
   (setf *db* (make-hash-table :test #'equal)))
+
+(defun new-db ()
+  (clear-db)
+  (with-open-file (out *db-file* :direction :output :if-exists :supersede)))
 
 (defun save-db ()
   (with-open-file (out *db-file* :direction :output :if-exists :supersede)
@@ -156,6 +170,13 @@ SELECT: Print the meaning of the requested word.
   (with-open-file (in *db-file*)
     (loop for line = (read in nil)
        while line do (add-word-meaning (car line) (cadr line)))))
+
+(defun nthmost (nth db)
+  (let (lst)
+    (maphash #'(lambda (k v) (push (list k v) lst)) db)
+    (setf lst (sort lst #'> :key #'cdadr))
+    (let ((len (min nth (length lst))))
+      (subseq lst 0 len))))
 
 ;; Dejizo REST API
 ;; (1) Search IDs of the word
@@ -173,7 +194,10 @@ SELECT: Print the meaning of the requested word.
   (item-list (query-word word)))
 
 (defun query-meaning-list (item)
-  (meaning-list (query-item item)))
+  "Return a cons cell whose car holds meaning of the word and
+whose cdr holds the number of search count."
+  (let ((meanings (meaning-list (query-item item))))
+    (cons (car meanings) 1)))
 
 (defun query-item (id)
   (http-query (http-query-item-uri id)))
